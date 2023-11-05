@@ -1,0 +1,24 @@
+training:
+  output_dir: "./../results"
+  num_train_epochs: 3
+  per_device_train_batch_size: 32
+  per_device_eval_batch_size: 64
+  warmup_steps: 500
+  weight_decay: 0.01
+  logging_dir: './../logs'
+  logging_steps: 10
+  save_strategy: 'epoch'
+  load_best_model_at_end: True
+  metric_for_best_model: "loss"
+model_params:
+  alphabet_size: 78
+  window_K: 10
+  input_size: 3
+  hidden_size: 400
+  num_layers: 1
+  component_K: 20
+dataset:
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+device: "'cuda' if torch.cuda.is_available() else 'cpu'"
