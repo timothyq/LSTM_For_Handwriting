@@ -14,14 +14,14 @@ def bivariate_normal(x1, x2, mu1, mu2, sigma1, sigma2, corr):
     Z = ((x1 - mu1) ** 2) / (sigma1 ** 2) + ((x2 - mu2) ** 2) / \
         (sigma2 ** 2) - 2 * corr * (x1 - mu1) * (x2 - mu2) / (sigma1 * sigma2)
     # Z is [batch, seq_len, K]
-    check_nan_inf(Z, "Z")
+    # check_nan_inf(Z, "Z")
     # equation 24
     norm = 2 * math.pi * sigma1 * sigma2 * \
         torch.sqrt(1 - corr ** 2)  # [batch, seq_len, K]
-    check_nan_inf(norm, "norm")
+    # check_nan_inf(norm, "norm")
     # equation 23
     res = torch.exp(-Z / (2 * (1 - corr ** 2))) / norm  # [batch, seq_len, K]
-    check_nan_inf(res, "res")
+    # check_nan_inf(res, "res")
 
     return res
 
@@ -45,7 +45,7 @@ def MDN_loss_function(output, y):
                          mu1, mu2, sigma1, sigma2, corr)
     # prob_x1_x2 is [batch, seq_len]
     prob_x1_x2 = torch.sum(prob_x1_x2, dim=-1)  # Sum over components
-    check_nan_inf(prob_x1_x2, "prob_x1_x2")
+    # check_nan_inf(prob_x1_x2, "prob_x1_x2")
 
     # Calculate the end of stroke loss
     x3 = y[:, :, 0].unsqueeze(-1)
@@ -60,9 +60,9 @@ def MDN_loss_function(output, y):
     # equation 26
     # Added epsilon to prevent log(0)
     loss = -torch.log(prob_x1_x2 + 1e-5) - \
-        torch.log(prob_x3 + 1e-5)  # range (0, inf)
+        torch.log(prob_x3 + 1e-5)  # range (0, inf), shape [batch, seq_len]
 
-    check_nan_inf(loss, "loss")
+    # check_nan_inf(loss, "loss")
     # print("prob_x1_x2", prob_x1_x2)
     # print("prob_x3", prob_x3)
 

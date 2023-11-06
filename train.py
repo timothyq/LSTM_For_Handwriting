@@ -62,7 +62,6 @@ def main():
         stroke_data, [train_size, val_size, test_size])
 
     # Here, the worker_init_fn should be set to a callable, like a function or a lambda, not an integer.
-    # If you want to set the number of workers, use `num_workers` argument instead.
     train_loader = DataLoader(
         train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE,
@@ -149,12 +148,12 @@ def main():
         running_loss = 0.0
         for iteration, (x, condition_sequence) in enumerate(tqdm(train_loader, desc="Training")):
             # x: [batch_size, seq_len, input_size]
-            print("x", x.shape)
+            # print("x", x.shape)
             # condition_sequence: [batch_size, seq_len, alphabet_size]
-            print("condition_sequence", condition_sequence.shape)
+            # print("condition_sequence", condition_sequence.shape)
             iter_loss = train_step(x, condition_sequence, iteration, epoch)
             running_loss += iter_loss
-            print("iter_loss", iter_loss)
+            # print("iter_loss", iter_loss)
 
             # Update the number of sequences processed
             total_sequences_processed += len(x)
@@ -166,13 +165,13 @@ def main():
                 running_loss = 0.0
 
         # Validate at the end of every epoch
-        valid_loss = validate()
-        print(f"Epoch: {epoch+1}/{EPOCHS} - Validation Loss: {valid_loss:.4f}")
+        # valid_loss = validate()
+        # print(f"Epoch: {epoch+1}/{EPOCHS} - Validation Loss: {valid_loss:.4f}")
 
-    # 7. Save the model
-    dynamic_save_path = f"models/condition_lstm_{epoch+1}e_{total_sequences_processed}.pt"
-    torch.save(model.state_dict(), dynamic_save_path)
-    print(f"Model saved to {dynamic_save_path}")
+        # 7. Save the model each epoch
+        dynamic_save_path = f"models/condition_lstm_{epoch+1}e_{total_sequences_processed}.pt"
+        torch.save(model.state_dict(), dynamic_save_path)
+        print(f"Model saved to {dynamic_save_path}")
 
 
 if __name__ == "__main__":

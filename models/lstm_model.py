@@ -137,13 +137,13 @@ class Condition_LSTM2(nn.Module):
         corr = torch.tanh(corr_tanh)  # Ensure correlation is between [-1, 1]
         # Ensure eot is between [0, 1]
         eot = torch.sigmoid(eot_logit.unsqueeze(-1))
-        check_nan_inf(pi, "pi")
-        check_nan_inf(mu1, "mu1", check_neg=False)
-        check_nan_inf(mu2, "mu2", check_neg=False)
-        check_nan_inf(std1, "std1")
-        check_nan_inf(std2, "std2")
-        check_nan_inf(corr, "corr", check_neg=False)
-        check_nan_inf(eot, "eot", upper_bound=1.0, lower_bound=0.0)
+        # check_nan_inf(pi, "pi")
+        # check_nan_inf(mu1, "mu1", check_neg=False)
+        # check_nan_inf(mu2, "mu2", check_neg=False)
+        # check_nan_inf(std1, "std1")
+        # check_nan_inf(std2, "std2")
+        # check_nan_inf(corr, "corr", check_neg=False)
+        # check_nan_inf(eot, "eot", upper_bound=1.0, lower_bound=0.0)
 
         # Reshape tensors
         # print("output", output.shape)
@@ -156,15 +156,15 @@ class Condition_LSTM2(nn.Module):
     def forward(self, x, c_seq, h1_prev=None, c1_prev=None, h2_prev=None, c2_prev=None, kappa_prev=None, w_t_pre=None):
         # Assuming x is of shape [batch, input_size]
         batch_size, _ = x.size()
-        check_nan_inf(x, "x")
+        # check_nan_inf(x, "x")
 
         if h1_prev is None or c1_prev is None or h2_prev is None or c2_prev is None:
             h1_prev = c1_prev = torch.zeros(
                 batch_size, self.hidden_size).to(x.device)
             h2_prev = c2_prev = torch.zeros(
                 batch_size, self.hidden_size).to(x.device)
-        check_nan_inf(h1_prev, "h1_prev")
-        check_nan_inf(c1_prev, "c1_prev")
+        # check_nan_inf(h1_prev, "h1_prev")
+        # check_nan_inf(c1_prev, "c1_prev")
 
         if kappa_prev is None:
             kappa_prev = torch.zeros(batch_size, self.window_K).to(x.device)
@@ -177,9 +177,9 @@ class Condition_LSTM2(nn.Module):
             1)], dim=2), (h1_prev.unsqueeze(0), c1_prev.unsqueeze(0)))
         h1_prev, c1_prev = h1_n.squeeze(
             0), c1_n.squeeze(0)  # [batch, hidden_size]
-        check_nan_inf(h1_out, "h1_out")
-        check_nan_inf(h1_prev, "h1_prev")
-        check_nan_inf(c1_prev, "c1_prev")
+        # check_nan_inf(h1_out, "h1_out")
+        # check_nan_inf(h1_prev, "h1_prev")
+        # check_nan_inf(c1_prev, "c1_prev")
 
         # Calculate attention weights and context vector (w_t) for lstm1
         # alpha, beta, kappa are [batch, window_K]
@@ -189,24 +189,24 @@ class Condition_LSTM2(nn.Module):
         alpha = torch.exp(alpha_hat)
         beta = torch.exp(beta_hat)
         kappa = kappa_prev + torch.exp(kappa_hat)
-        check_nan_inf(alpha, "alpha")
-        check_nan_inf(beta, "beta")
-        check_nan_inf(kappa, "kappa")
+        # check_nan_inf(alpha, "alpha")
+        # check_nan_inf(beta, "beta")
+        # check_nan_inf(kappa, "kappa")
 
         # alpha, beta, kappa are [batch, window_K], c_seq is [batch, seq_len_c, alphabet_size]
         # w_t is [batch, alphabet_size]
         w_t = self.compute_phi(alpha, beta, kappa, c_seq)
-        check_nan_inf(w_t, "w_t")
+        # check_nan_inf(w_t, "w_t")
 
         # Forward through lstm2
         # h2_out is [batch, seq_len = 1, hidden_size]
         h2_out, (h2_n, c2_n) = self.lstm2(torch.cat([x.unsqueeze(1), w_t.unsqueeze(1), h1_out], dim=2),
                                           (h2_prev.unsqueeze(0), c2_prev.unsqueeze(0)))
         h2_prev, c2_prev = h2_n.squeeze(0), c2_n.squeeze(0)
-        check_nan_inf(h2_out, "h2_out")
+        # check_nan_inf(h2_out, "h2_out")
 
         w_t_pre = w_t
-        check_nan_inf(w_t_pre, "w_t_pre")
+        # check_nan_inf(w_t_pre, "w_t_pre")
 
         # Compute output
         out = self.fc2(h2_out.squeeze(1))  # [batch, output_size]
@@ -404,29 +404,18 @@ class Condition_LSTM(nn.Module):
 def sample_from_gmm(pi, mu1, mu2, std1, std2, corr):
     # Assume pi, mu1, mu2, std1, std2, corr are [batch, 1, K]
     # Flatten the pi tensor to [batch, K] for sampling
-    pi_flat = pi.squeeze(1)
-    categorical = torch.distributions.Categorical(pi_flat)
-    component_idx = categorical.sample()  # This should now be within the range of K
+    # Find the index of the most likely component for each instance in the batch
+    _, most_likely_idx = pi.squeeze(1).max(dim=1)
 
     # Adjust indexing for batched operation
-    # Gather the selected component for each item in the batch
     batch_indices = torch.arange(mu1.size(0), device=mu1.device)
-    mu = torch.stack([mu1[batch_indices, 0, component_idx],
-                     mu2[batch_indices, 0, component_idx]], dim=-1)
-    sigma = torch.stack([std1[batch_indices, 0, component_idx],
-                        std2[batch_indices, 0, component_idx]], dim=-1)
-    rho = corr[batch_indices, 0, component_idx]
 
-    # Create a bivariate Gaussian distribution and sample from it
-    mean = mu.squeeze(1)
-    cov = torch.zeros(mean.size(0), 2, 2, device=mu.device)
-    cov[:, 0, 0] = sigma[:, 0] ** 2
-    cov[:, 1, 1] = sigma[:, 1] ** 2
-    cov[:, 0, 1] = cov[:, 1, 0] = rho * sigma[:, 0] * sigma[:, 1]
+    # Extract the means for the most likely Gaussian component
+    mu = torch.stack([mu1[batch_indices, 0, most_likely_idx],
+                      mu2[batch_indices, 0, most_likely_idx]], dim=-1)
 
-    mvn = torch.distributions.MultivariateNormal(mean, covariance_matrix=cov)
-    sample = mvn.sample()
-    return sample
+    # take the mean of the most probable Gaussian component as the representative point.
+    return mu.squeeze(1)
 
 
 def process_sample_for_next_input(sample):
