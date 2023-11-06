@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from utils import check_nan_inf
 import torch.nn.functional as F
+import numpy as np
 
 
 class MixtureDensityLayer(nn.Module):
@@ -10,6 +11,7 @@ class MixtureDensityLayer(nn.Module):
         self.num_mixtures = num_mixtures
 
     def forward(self, output):
+        # output is [batch, seq_len, 6*K+1]
         K = self.num_mixtures
         pi_logits, mu1, mu2, std_exp1, std_exp2, corr_tanh, eot_logit = torch.split(
             output, K, dim=-1)
@@ -285,8 +287,8 @@ class Condition_LSTM(nn.Module):
             alpha_hat, beta_hat, kappa_hat = torch.chunk(
                 abp, 3, dim=1)  # [batch, window_K]
             alpha = torch.exp(alpha_hat)  # [batch, window_K]
-            beta = torch.exp(beta_hat)
-            kappa = kappa_prev + torch.exp(kappa_hat)
+            beta = torch.exp(beta_hat)  # [batch, window_K]
+            kappa = kappa_prev + torch.exp(kappa_hat)  # [batch, window_K]
             # [batch, alphabet_size]
             w_t = self.compute_phi(alpha, beta, kappa, c_seq)
 
@@ -306,3 +308,126 @@ class Condition_LSTM(nn.Module):
         outputs = torch.stack(outputs, dim=1)
         # outputs is [batch, seq_len, output_size]
         return self.mdn(outputs)
+
+    def predict(self, initial_input, c_seq, seq_len, threshold=0.6):
+        self.eval()
+        # Initialize hidden states, cell states, kappa, and w_t_pre
+        batch_size = initial_input.size(0)
+        print("c_seq", c_seq.shape)
+
+        # Initialize hidden states and cell states for both LSTM layers
+        h1_prev = torch.zeros(self.num_layers, batch_size,
+                              self.hidden_size).to(initial_input.device)
+        c1_prev = torch.zeros(self.num_layers, batch_size,
+                              self.hidden_size).to(initial_input.device)
+        h2_prev = torch.zeros(self.num_layers, batch_size,
+                              self.hidden_size).to(initial_input.device)
+        c2_prev = torch.zeros(self.num_layers, batch_size,
+                              self.hidden_size).to(initial_input.device)
+
+        # Initialize kappa_prev and w_t_pre
+        kappa_prev = torch.zeros(
+            batch_size, self.window_K).to(initial_input.device)
+        w_t_pre = torch.zeros(batch_size, self.alphabet_size).to(
+            initial_input.device)
+        # Shape becomes [batch_size, 1, alphabet_size]
+        w_t_pre = w_t_pre.unsqueeze(1)
+
+        # Starting input
+        # initial_input should be a tensor with shape [batch, 3] representing (eot, x1, x2)
+        x = initial_input
+
+        predictions = []
+
+        for _ in range(seq_len):
+            # Forward pass through LSTM1
+            # Concatenate x and w_t_pre and unsqueeze to add sequence length dimension
+            lstm1_input = torch.cat(
+                [x, w_t_pre], dim=2)
+
+            h1_out, (h1_n, c1_n) = self.lstm1(lstm1_input,
+                                              (h1_prev, c1_prev) if h1_prev is not None else None)
+            h1_prev, c1_prev = h1_n, c1_n
+
+            # Compute attention and context vector (w_t)
+            alpha_beta_kappa = self.alpha_beta_kappa(h1_out.squeeze(1))
+            alpha_hat, beta_hat, kappa_hat = torch.chunk(
+                alpha_beta_kappa, 3, dim=1)  # [batch, window_K]
+            alpha, beta, kappa = torch.exp(alpha_hat), torch.exp(
+                beta_hat), kappa_prev + torch.exp(kappa_hat) if kappa_prev is not None else torch.exp(kappa_hat)
+            # [batch, alphabet_size]
+            # [batch, alphabet_size]
+            w_t = self.compute_phi(alpha, beta, kappa, c_seq)
+
+            # Forward pass through LSTM2
+            lstm2_input = torch.cat(
+                [x, w_t.unsqueeze(1), h1_out], dim=2)
+            h2_out, (h2_n, c2_n) = self.lstm2(lstm2_input,
+                                              (h2_prev, c2_prev) if h2_prev is not None else None)
+            h2_prev, c2_prev = h2_n, c2_n
+
+            # Output layer
+            out = self.fc2(h2_out.squeeze(1))  # [batch, output_size]
+
+            # Split and transform the output into GMM parameters
+            pi, mu1, mu2, std1, std2, corr, eot = self.mdn(out.unsqueeze(1))
+
+            # Sample from the GMM
+            sample = sample_from_gmm(pi, mu1, mu2, std1, std2, corr)
+
+            # Prepare the sample for the next input
+            # Should return a tensor of shape [batch, 2]
+            # print("sample", sample.shape)
+            new_x = process_sample_for_next_input(sample)
+            # new_x = sample
+
+            # Update x for the next iteration, adding the eot probability
+            # new_x is [batch, 2], eot is [batch, 1]
+            eot_binary = (torch.sigmoid(eot) > threshold).float()
+            x = torch.cat((eot_binary, new_x), dim=-
+                          1)  # [batch, 3]
+            # print("x", x.shape)
+
+            # Append the new sample to predictions
+            predictions.append(x.squeeze(1).detach())
+
+        print("prediction", predictions[0].shape)
+        predictions = torch.stack(predictions, axis=0)
+        print("predictions", predictions.shape)
+        predictions = predictions.permute(1, 0, 2)
+        print("predictions", predictions.shape)
+        # predictions[0][0][0] = 1.0
+
+        return predictions
+
+
+def sample_from_gmm(pi, mu1, mu2, std1, std2, corr):
+    # Assume pi, mu1, mu2, std1, std2, corr are [batch, 1, K]
+    # Flatten the pi tensor to [batch, K] for sampling
+    pi_flat = pi.squeeze(1)
+    categorical = torch.distributions.Categorical(pi_flat)
+    component_idx = categorical.sample()  # This should now be within the range of K
+
+    # Adjust indexing for batched operation
+    # Gather the selected component for each item in the batch
+    batch_indices = torch.arange(mu1.size(0), device=mu1.device)
+    mu = torch.stack([mu1[batch_indices, 0, component_idx],
+                     mu2[batch_indices, 0, component_idx]], dim=-1)
+    sigma = torch.stack([std1[batch_indices, 0, component_idx],
+                        std2[batch_indices, 0, component_idx]], dim=-1)
+    rho = corr[batch_indices, 0, component_idx]
+
+    # Create a bivariate Gaussian distribution and sample from it
+    mean = mu.squeeze(1)
+    cov = torch.zeros(mean.size(0), 2, 2, device=mu.device)
+    cov[:, 0, 0] = sigma[:, 0] ** 2
+    cov[:, 1, 1] = sigma[:, 1] ** 2
+    cov[:, 0, 1] = cov[:, 1, 0] = rho * sigma[:, 0] * sigma[:, 1]
+
+    mvn = torch.distributions.MultivariateNormal(mean, covariance_matrix=cov)
+    sample = mvn.sample()
+    return sample
+
+
+def process_sample_for_next_input(sample):
+    return sample.unsqueeze(0)  # add a batch dimension

@@ -124,7 +124,6 @@ def main():
         model.eval()
         total_loss = 0
         with torch.no_grad():
-            # Using tqdm for progress bar during validation
             # i = 0
             for x, condition_sequence in tqdm(val_loader, desc="Validation"):
                 # Split the data into input and target sequences
@@ -149,7 +148,10 @@ def main():
         model.train()
         running_loss = 0.0
         for iteration, (x, condition_sequence) in enumerate(tqdm(train_loader, desc="Training")):
-
+            # x: [batch_size, seq_len, input_size]
+            print("x", x.shape)
+            # condition_sequence: [batch_size, seq_len, alphabet_size]
+            print("condition_sequence", condition_sequence.shape)
             iter_loss = train_step(x, condition_sequence, iteration, epoch)
             running_loss += iter_loss
             print("iter_loss", iter_loss)

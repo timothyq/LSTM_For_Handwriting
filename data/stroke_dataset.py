@@ -32,7 +32,7 @@ class Stroke_dataset(Dataset):
         for idx, char in enumerate(sentence):
             char_idx = self.vocab.index(char)
             one_hot[idx, char_idx] = 1
-        return one_hot
+        return one_hot  # (len(sentence), len(self.vocab))
 
     def __len__(self):
         return len(self.data)

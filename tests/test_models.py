@@ -131,7 +131,7 @@ def test_coditional_LSTM():
     num_layers = 1
     component_K = 20
     batch_size = 32
-    output_size = 6 * component_K + 1  # Adjusted based on your model's output.
+    output_size = 6 * component_K + 1
 
     model = Condition_LSTM(alphabet_size, window_K,
                            input_size, hidden_size, num_layers, component_K)
