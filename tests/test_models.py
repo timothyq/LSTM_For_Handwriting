@@ -14,7 +14,7 @@ def test_uncondition_lstm_params():
     # 1. check if the model is able to instantiate without any errors.
     # 2. check if the model is initialized with the correct parameters.
     model = Uncondition_LSTM(
-        input_size=3, hidden_size=400, num_layers=3, component_K=20)
+        input_size=3, alphabet_size=78, hidden_size=400, num_layers=3, component_K=20)
     assert isinstance(model.lstm, nn.LSTM)
     assert isinstance(model.fc, nn.Linear)
     assert model.lstm.input_size == 3
@@ -31,7 +31,7 @@ def test_uncondition_lstm_forward_backword():
     # 2. test backpropagation
 
     model = Uncondition_LSTM(
-        input_size=3, hidden_size=400, num_layers=3, component_K=20)
+        input_size=3, alphabet_size=78, hidden_size=400, num_layers=3, component_K=20)
     model.train()  # Ensure the model is in training mode
     x = torch.rand(10, 5, 3)  # [batch_size, seq_len, input_size]
     output = model.forward(x)  # [batch_size, seq_len, output_size]
@@ -56,7 +56,7 @@ def test_uncondition_lstm_forward_backword():
                 has_grad = True
 
     assert has_grad, "No gradients found!"
-    assert output.shape == (10, 5, 121)
+    assert len(output) == 7
 
 
 @pytest.mark.uncon_lstm
@@ -64,7 +64,7 @@ def test_uncondition_lstm_hidden_initialization():
     # This test function is to:
     # 1. check if the model is able to instantiate its hidden states without any errors.
     model = Uncondition_LSTM(
-        input_size=3, hidden_size=400, num_layers=3, component_K=20)
+        input_size=3, alphabet_size=78, hidden_size=400, num_layers=3, component_K=20)
     # x = torch.rand(10, 5, 3)  # [seq_len, batch_size, input_size]
     hidden, cell = model.init_hidden(batch_size=5)
     assert hidden.shape == (3, 5, 400)
@@ -73,43 +73,55 @@ def test_uncondition_lstm_hidden_initialization():
 
 @pytest.mark.uncon_lstm
 def test_uncondition_lstm_variant_forward():
+    alphabet_size = 78
     model = Uncondition_LSTM(
-        input_size=3, hidden_size=900, num_layers=1, component_K=20)
-    x = torch.rand(10, 5, 3)  # [seq_len, batch_size, input_size]
-    output = model.forward(x)
-    assert output.shape == (10, 5, 121)
+        alphabet_size=alphabet_size, input_size=3, hidden_size=900, num_layers=1, component_K=20)
+    x = torch.rand(10, 5, 3)  # [batch, seq_len, input_size]
+
+    output = model(x)
+
+    # Output : (pi, mu1, mu2, std1, std2, corr, eot)
+    assert len(output) == 7, "Output tuple should contain 7 elements"
+
+    expected_shapes = [(10, 5, 20), (10, 5, 20), (10, 5, 20),
+                       (10, 5, 20), (10, 5, 20), (10, 5, 20), (10, 5, 1)]
+
+    for i, shape in enumerate(expected_shapes):
+        assert output[i].shape == shape, f"Shape mismatch for output component {i}"
 
 
 @pytest.mark.uncon_lstm
 def test_uncondition_lstm_variant_forward_backward():
+    alphabet_size = 78
     model = Uncondition_LSTM(
-        input_size=3, hidden_size=900, num_layers=1, component_K=20)
-    model.train()  # Ensure the model is in training mode
-    x = torch.rand(10, 5, 3)  # [seq_len, batch_size, input_size]
-    output = model.forward(x)
+        alphabet_size=alphabet_size, input_size=3, hidden_size=900, num_layers=1, component_K=20)
+    model.train()
+    x = torch.rand(10, 5, 3)  # [batch, seq_len, input_size]
 
-    # dummy target
-    target = torch.rand(10, 5, 121)
+    y = torch.rand(10, 5, 3)  # [batch, seq_len, 3]
 
-    loss = MDN_loss_function(output, target)
+    output = model(x)
 
-    # Test backpropagation
+    loss = MDN_loss_function(output, y)
+
     loss.backward()
 
-    # Test if gradients are not all zeros
-    has_grad = False
+    # Test if gradients are not all zeros and are valid
+    gradients_valid = True
     for param in model.parameters():
         if param.grad is not None:
-            # Ensure gradient is not NaN
-            assert not torch.isnan(
-                param.grad).any(), "Gradient has NaN values!"
+            # Check if gradient is NaN or infinity
+            if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                gradients_valid = False
+                break
 
             # Check if at least one gradient value is non-zero
-            if torch.sum(param.grad).item() != 0:
-                has_grad = True
+            if param.grad.sum().item() == 0:
+                gradients_valid = False
+                break
 
-    assert has_grad, "No gradients found!"
-    assert output.shape == (10, 5, 121)
+    assert gradients_valid, "Invalid or no gradients found!"
+
 
 # ------------------- Condition_LSTM test session starts -------------------
 

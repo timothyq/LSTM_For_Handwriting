@@ -42,10 +42,10 @@ class MixtureDensityLayer(nn.Module):
 
 
 class Uncondition_LSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, component_K, dropout=0):
+    def __init__(self, alphabet_size, input_size, hidden_size, num_layers, component_K, dropout=0):
         super(Uncondition_LSTM, self).__init__()
-
         self.input_size = input_size
+        self.hidden_size = alphabet_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.output_size = component_K * 6 + 1
@@ -57,11 +57,14 @@ class Uncondition_LSTM(nn.Module):
 
         # output layer
         self.fc = nn.Linear(hidden_size, self.output_size)
+        self.mdn = MixtureDensityLayer(component_K)
 
     def forward(self, x):
+        # x is [batch, seq_len, input_size]
         output, (hidden, cell) = self.lstm(x)
 
         output = self.fc(output)
+        output = self.mdn(output)
 
         return output  # [batch, seq_len, output_size]
 
@@ -69,9 +72,9 @@ class Uncondition_LSTM(nn.Module):
     # not using batches. The paper seems to use online learning which doesn't use batches.
 
     def init_hidden(self, batch_size):
-        # Retrieve the device from the model's parameters
+        # Retrieve the device
         device = next(self.parameters()).device
-        # Initialize hidden and cell states with zeros
+        # Initialize with zeros
         hidden = torch.zeros(self.num_layers, batch_size,
                              self.hidden_size).to(device)
         cell = torch.zeros(self.num_layers, batch_size,
