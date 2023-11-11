@@ -1,4 +1,4 @@
-from models.lstm_model import Condition_LSTM, Uncondition_LSTM
+from models.lstm_model import Condition_LSTM, Uncondition_LSTM, sample_from_mdn
 from losses.custom_loss import MDN_loss_function
 import pytest
 import math
@@ -253,3 +253,32 @@ def test_condition_lstm_forward_backward():
     # Compute loss and perform backward pass
     loss = MDN_loss_function(output, target)
     loss.backward()
+
+
+@pytest.mark.model_utils
+def test_sample_from_mdn():
+    # Example test for basic functionality
+    batch_size, seq_len, num_mixtures = 1, 1, 20
+    pi = torch.softmax(torch.randn(batch_size, seq_len, num_mixtures), dim=-1)
+    mu1 = torch.randn(batch_size, seq_len, num_mixtures)
+    mu2 = torch.randn(batch_size, seq_len, num_mixtures)
+    sigma1 = torch.exp(torch.randn(batch_size, seq_len, num_mixtures)).clamp(
+        min=0.11, max=1.9)
+    sigma2 = torch.exp(torch.randn(batch_size, seq_len, num_mixtures)).clamp(
+        min=0.11, max=1.9)
+    rho = torch.tanh(torch.randn(batch_size, seq_len, num_mixtures))
+    eos_prob = torch.zeros(batch_size, seq_len, 1)
+
+    mdn_output = (pi, mu1, mu2, sigma1, sigma2, rho, eos_prob)
+
+    sampled_points = sample_from_mdn(mdn_output)
+
+    assert sampled_points.shape == (
+        batch_size, seq_len, 3), "Output shape is incorrect"
+
+    assert sigma1.min() > 0.1 and sigma1.max() < 2.0, "sigma1 values are out of bounds"
+    assert sigma2.min() > 0.1 and sigma2.max() < 2.0, "sigma2 values are out of bounds"
+
+    assert sampled_points[:, :, 1:].min() > -3.0 and sampled_points[:,
+                                                                    :, 1:].max() < 3.0, "Sampled points are out of expected range"
+    assert sampled_points[:, :, 0] == 0.0

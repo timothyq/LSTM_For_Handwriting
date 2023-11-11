@@ -40,6 +40,11 @@ class Stroke_dataset(Dataset):
     def __getitem__(self, index):
         return self.data[index], self.sentences[index]
 
+    def sort_by_sequence_length(self):
+        # Sort the dataset by the length of the stroke sequences
+        self.data, self.sentences = zip(*sorted(zip(self.data, self.sentences),
+                                                key=lambda x: len(x[0]),
+                                                reverse=True))
     # def __getitem__(self, index):
     #     # padding version of the dataset
     #     data_item = self.data[index]

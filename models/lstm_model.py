@@ -3,6 +3,8 @@ import torch.nn as nn
 from utils import check_nan_inf
 import torch.nn.functional as F
 import numpy as np
+import torch.nn.init as init
+from torch.distributions import Categorical, MultivariateNormal
 
 
 class MixtureDensityLayer(nn.Module):
@@ -13,16 +15,16 @@ class MixtureDensityLayer(nn.Module):
     def forward(self, output):
         # output is [batch, seq_len, 6*K+1]
         K = self.num_mixtures
-        pi_logits, mu1, mu2, std_exp1, std_exp2, corr_tanh, eot_logit = torch.split(
+        pi_logits, mu1, mu2, std_exp1, std_exp2, corr_tanh, eos = torch.split(
             output, K, dim=-1)
         # Assuming eot_logit is a single value, not a vector like the others.
-        eot_logit = output[:, :, -1]
+        # eot_logit = output[:, :, -1]
 
         pi = F.softmax(pi_logits, dim=-1)
         std1 = torch.exp(std_exp1)
         std2 = torch.exp(std_exp2)
         corr = torch.tanh(corr_tanh)
-        eot = torch.sigmoid(eot_logit.unsqueeze(-1))
+        eos_p = torch.sigmoid(eos)
 
         # check_nan_inf(pi, "pi")
         # check_nan_inf(mu1, "mu1", check_neg=False)
@@ -30,7 +32,7 @@ class MixtureDensityLayer(nn.Module):
         # check_nan_inf(std1, "std1")
         # check_nan_inf(std2, "std2")
         # check_nan_inf(corr, "corr", check_neg=False)
-        # check_nan_inf(eot, "eot", upper_bound=1.0, lower_bound=0.0)
+        # check_nan_inf(eos_p, "eos_p", upper_bound=1.0, lower_bound=0.0)
 
         # Reshape tensors
         # print("output", output.shape)
@@ -38,7 +40,7 @@ class MixtureDensityLayer(nn.Module):
         # print("std1", std1.shape)
         # [batch, seq_len, K, 2]
 
-        return pi, mu1, mu2, std1, std2, corr, eot
+        return pi, mu1, mu2, std1, std2, corr, eos_p  # [batch, seq_len, K]
 
 
 class Uncondition_LSTM(nn.Module):
@@ -55,31 +57,60 @@ class Uncondition_LSTM(nn.Module):
         self.lstm = nn.LSTM(input_size, hidden_size,
                             num_layers, batch_first=True, dropout=dropout)
 
-        # output layer
+        self.layer_norms = nn.LayerNorm(hidden_size)
         self.fc = nn.Linear(hidden_size, self.output_size)
         self.mdn = MixtureDensityLayer(component_K)
 
     def forward(self, x):
         # x is [batch, seq_len, input_size]
-        output, (hidden, cell) = self.lstm(x)
+        x, _ = self.lstm(x)
+        x = self.layer_norms(x)
+        output = self.fc(x)  # [batch, seq_len, output_size]
+        output = self.mdn(output)  # 7 * [batch, seq_len, K]
 
-        output = self.fc(output)
-        output = self.mdn(output)
+        return output  # 7 * [batch, seq_len, K]
 
-        return output  # [batch, seq_len, output_size]
+    def predict(self, sequence_length, device):
+        # [batch=1, seq_len=1, input_size]
+        current_input = torch.zeros(1, 1, 3, device=device)
+        generated_sequence = current_input
+
+        for _ in range(sequence_length):
+            # Generate output for the current input
+            output = self.forward(current_input)  # 7 * [batch=1, seq_len=1, K]
+
+            # Sample from the output distribution (MDN parameters)
+            next_point = sample_from_mdn(output)  # [batch=1, seq_len=1, 3]
+
+            # Append the generated point to the sequence
+            generated_sequence = torch.cat(
+                (generated_sequence, next_point), dim=1)  # [batch=1, seq_len, 3]
+
+            # Prepare the input for the next step
+            current_input = next_point
+
+            # Optionally, check for end of stroke and break if needed
+
+        return generated_sequence
 
     # might also need a function to initialize the hidden state, especially if we're
     # not using batches. The paper seems to use online learning which doesn't use batches.
 
-    def init_hidden(self, batch_size):
-        # Retrieve the device
-        device = next(self.parameters()).device
-        # Initialize with zeros
-        hidden = torch.zeros(self.num_layers, batch_size,
-                             self.hidden_size).to(device)
-        cell = torch.zeros(self.num_layers, batch_size,
-                           self.hidden_size).to(device)
-        return hidden, cell
+    def _initialize_weights(self):
+        for name, param in self.lstm.named_parameters():
+            if 'weight_ih' in name:
+                init.xavier_uniform_(param.data)
+            elif 'weight_hh' in name:
+                init.orthogonal_(param.data)
+            elif 'bias' in name:
+                param.data.fill_(0)
+                # initializing biases for LSTM forget gate to 1?
+                n = param.size(0)
+                start, end = n // 4, n // 2
+                param.data[start:end].fill_(1.)
+
+        init.xavier_uniform_(self.fc.weight)
+        self.fc.bias.data.fill_(0)
 
 
 class Condition_LSTM2(nn.Module):
@@ -316,7 +347,7 @@ class Condition_LSTM(nn.Module):
         self.eval()
         # Initialize hidden states, cell states, kappa, and w_t_pre
         batch_size = initial_input.size(0)
-        print("c_seq", c_seq.shape)
+        # print("c_seq", c_seq.shape)
 
         # Initialize hidden states and cell states for both LSTM layers
         h1_prev = torch.zeros(self.num_layers, batch_size,
@@ -423,3 +454,44 @@ def sample_from_gmm(pi, mu1, mu2, std1, std2, corr):
 
 def process_sample_for_next_input(sample):
     return sample.unsqueeze(0)  # add a batch dimension
+
+
+def sample_from_mdn(mdn_output):
+    pi, mu1, mu2, sigma1, sigma2, rho, eos_prob = mdn_output
+    batch_size, seq_len, num_mixtures = pi.size()
+
+    mixture_idx = Categorical(pi).sample()  # [batch, seq_len]
+
+    print("mu1", mu1.shape)
+    print("mixture_idx", mixture_idx)
+    mu1_selected = torch.gather(
+        mu1, 2, mixture_idx.unsqueeze(-1)).squeeze(-1)  # [batch, seq_len]
+    mu2_selected = torch.gather(mu2, 2, mixture_idx.unsqueeze(-1)).squeeze(-1)
+    sigma1_selected = torch.gather(
+        sigma1, 2, mixture_idx.unsqueeze(-1)).squeeze(-1)
+    sigma2_selected = torch.gather(
+        sigma2, 2, mixture_idx.unsqueeze(-1)).squeeze(-1)
+    rho_selected = torch.gather(rho, 2, mixture_idx.unsqueeze(-1)).squeeze(-1)
+    print("mu1_selected", mu1_selected.shape)
+
+    cov = torch.zeros((batch_size, seq_len, 2, 2), device=mu1.device)
+    cov[:, :, 0, 0] = sigma1_selected ** 2
+    cov[:, :, 1, 1] = sigma2_selected ** 2
+    cov[:, :, 0, 1] = cov[:, :, 1, 0] = rho_selected * \
+        sigma1_selected * sigma2_selected
+    print("cov", cov.shape)
+
+    print("torch.stack((mu1_selected, mu2_selected), dim=-1)",
+          torch.stack((mu1_selected, mu2_selected), dim=-1).shape)
+    bivariate_normal = MultivariateNormal(torch.stack(
+        (mu1_selected, mu2_selected), dim=-1), covariance_matrix=cov)
+    next_x = bivariate_normal.sample()
+
+    print("next_x", next_x.shape)
+    print("eos_prob", eos_prob.shape)
+    eos = torch.distributions.Bernoulli(eos_prob).sample()
+    print("eos", eos.shape)
+
+    next_point = torch.cat([eos, next_x], dim=2)  # [batch, seq_len, 3]
+
+    return next_point

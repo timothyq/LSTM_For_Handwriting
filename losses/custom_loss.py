@@ -34,7 +34,7 @@ def MDN_loss_function(output, y):
     # corr is [batch, seq_len, K],
     # eot is [batch, seq_len, 1]
     pi, mu1, mu2, sigma1, sigma2, corr, eot = output
-
+    # print(pi.shape, mu1.shape, sigma1.shape, eot.shape, y.shape)
     # Compute loss
     x1, x2 = y[:, :, 1], y[:, :, 2]  # [batch, seq_len]
 
@@ -51,6 +51,49 @@ def MDN_loss_function(output, y):
     x3 = y[:, :, 0].unsqueeze(-1)
     # equation 26
     prob_x3 = (eot * x3 + (1 - eot) * (1 - x3)).squeeze(-1)  # [batch, seq_len]
+    # if not check_nan_inf(prob_x3, "prob_x3"):
+    #     # print("x3", x3)
+    #     # print("eot", eot)
+    #     pass
+
+    # Compute negative log likelihood for each point in the sequence
+    # equation 26
+    # Added epsilon to prevent log(0)
+    loss = -torch.log(prob_x1_x2 + 1e-8) - \
+        torch.log(prob_x3 + 1e-8)  # range (0, inf), shape [batch, seq_len]
+
+    # check_nan_inf(loss, "loss")
+    # print("prob_x1_x2", prob_x1_x2)
+    # print("prob_x3", prob_x3)
+
+    return torch.mean(loss)  # Return mean loss over the sequence
+
+
+def MDN_loss_function2(output, y):
+    # y is [batch, seq_len, 3]
+    # pi is [batch, seq_len, K],
+    # mu1, mu2 are [batch, seq_len, K],
+    # sigma1, sigma2 are [batch, seq_len, K],
+    # corr is [batch, seq_len, K],
+    # eot is [batch, seq_len, 1]
+    pi, mu1, mu2, sigma1, sigma2, corr, eot = output
+
+    # Compute loss
+    x1, x2 = y[:, :, 1], y[:, :, 2]
+
+    # Get bivariate normal distribution
+    # prob_x1_x2 is [batch, seq_len, K]
+    prob_x1_x2 = pi * \
+        bivariate_normal(x1.unsqueeze(-1), x2.unsqueeze(-1),
+                         mu1, mu2, sigma1, sigma2, corr)
+    # prob_x1_x2 is [batch, seq_len]
+    prob_x1_x2 = torch.sum(prob_x1_x2, dim=-1)  # Sum over components
+    check_nan_inf(prob_x1_x2, "prob_x1_x2")
+
+    # Calculate the end of stroke loss
+    x3 = y[:, :, 0].unsqueeze(-1)
+    # equation 26
+    prob_x3 = (eot * x3 + (1 - eot) * (1 - x3)).squeeze(-1)  # [batch, seq_len]
     if not check_nan_inf(prob_x3, "prob_x3"):
         # print("x3", x3)
         # print("eot", eot)
@@ -62,7 +105,7 @@ def MDN_loss_function(output, y):
     loss = -torch.log(prob_x1_x2 + 1e-5) - \
         torch.log(prob_x3 + 1e-5)  # range (0, inf), shape [batch, seq_len]
 
-    # check_nan_inf(loss, "loss")
+    check_nan_inf(loss, "loss")
     # print("prob_x1_x2", prob_x1_x2)
     # print("prob_x3", prob_x3)
 

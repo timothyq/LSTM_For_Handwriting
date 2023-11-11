@@ -60,8 +60,6 @@ def main():
 
     train_dataset, val_dataset, test_dataset = random_split(
         stroke_data, [train_size, val_size, test_size])
-
-    # Here, the worker_init_fn should be set to a callable, like a function or a lambda, not an integer.
     train_loader = DataLoader(
         train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE,
@@ -125,7 +123,6 @@ def main():
         with torch.no_grad():
             # i = 0
             for x, condition_sequence in tqdm(val_loader, desc="Validation"):
-                # Split the data into input and target sequences
                 input_seq = x[:, :-1]
                 target_seq = x[:, 1:]
 
