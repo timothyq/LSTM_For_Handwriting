@@ -43,6 +43,93 @@ class MixtureDensityLayer(nn.Module):
         return pi, mu1, mu2, std1, std2, corr, eos_p  # [batch, seq_len, K]
 
 
+class LayerNormLSTMCell(nn.Module):
+    def __init__(self, input_size, hidden_size, dropout=0):
+        super(LayerNormLSTMCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.dropout = dropout
+
+        self.lstm_cell = nn.LSTMCell(input_size, hidden_size)
+        self.ln = nn.LayerNorm(hidden_size)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, input, states):
+        hx, cx = states
+        hx, cx = self.lstm_cell(input, (hx, cx))
+        hx = self.ln(hx)
+        hx = self.dropout(hx)
+        return hx, cx
+
+    def _initialize_weights(self):
+        for name, param in self.lstm_cell.named_parameters():
+            if 'weight_ih' in name:
+                init.xavier_uniform_(param.data)
+            elif 'weight_hh' in name:
+                init.orthogonal_(param.data)
+            elif 'bias' in name:
+                param.data.fill_(0)
+                n = param.size(0)
+                start, end = n // 4, n // 2
+                param.data[start:end].fill_(1.)
+
+        init.constant_(self.ln.weight, 1)
+        init.constant_(self.ln.bias, 0)
+
+    def init_hidden(self, batch_size, device):
+        hx = torch.zeros(batch_size, self.hidden_size).to(device)
+        cx = torch.zeros(batch_size, self.hidden_size).to(device)
+        return hx, cx
+
+
+class Uncondition_LayerNorm_LSTM(nn.Module):
+    def __init__(self, alphabet_size, input_size, hidden_size, num_layers, component_K, dropout=0):
+        super(Uncondition_LayerNorm_LSTM, self).__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+
+        layers = [LayerNormLSTMCell(
+            input_size if i == 0 else hidden_size, hidden_size, dropout) for i in range(num_layers)]
+        self.layers = nn.ModuleList(layers)
+        self.fc = nn.Linear(hidden_size, component_K * 6 + 1)
+        self.mdn = MixtureDensityLayer(component_K)
+        self._initialize_weights()
+
+    def forward(self, input):
+        batch_size, seq_len, _ = input.size()
+        current_input = input
+
+        for layer in self.layers:
+            hidden_seq = []
+            hx, cx = layer.init_hidden(batch_size, input.device)
+            for t in range(seq_len):
+                hx, cx = layer(current_input[:, t, :], (hx, cx))
+                hidden_seq.append(hx.unsqueeze(1))
+            current_input = torch.cat(hidden_seq, dim=1)
+
+        return self.mdn(self.fc(current_input))
+
+    def _initialize_weights(self):
+        for layer in self.layers:
+            layer._initialize_weights()
+
+        init.xavier_uniform_(self.fc.weight)
+        init.zeros_(self.fc.bias)
+
+    def predict(self, sequence_length, device):
+        # [batch=1, seq_len=1, input_size]
+        current_input = torch.zeros(1, 1, 3, device=device)
+        generated_sequence = current_input
+
+        for _ in range(sequence_length):
+            output = self.forward(current_input)
+            next_point = sample_from_mdn(output)
+            generated_sequence = torch.cat(
+                (generated_sequence, next_point), dim=1)
+            current_input = next_point
+        return generated_sequence
+
+
 class Uncondition_LSTM(nn.Module):
     def __init__(self, alphabet_size, input_size, hidden_size, num_layers, component_K, dropout=0):
         super(Uncondition_LSTM, self).__init__()
@@ -60,6 +147,7 @@ class Uncondition_LSTM(nn.Module):
         self.layer_norms = nn.LayerNorm(hidden_size)
         self.fc = nn.Linear(hidden_size, self.output_size)
         self.mdn = MixtureDensityLayer(component_K)
+        self._initialize_weights()
 
     def forward(self, x):
         # x is [batch, seq_len, input_size]

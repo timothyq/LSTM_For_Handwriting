@@ -5,7 +5,7 @@ from tqdm import tqdm
 import torch.optim as optim
 import argparse
 from torch.utils.data import DataLoader
-from models.lstm_model import Uncondition_LSTM
+from models.lstm_model import Uncondition_LayerNorm_LSTM
 from data.stroke_dataset import Stroke_dataset
 from losses.custom_loss import MDN_loss_function
 from torch.utils.tensorboard import SummaryWriter
@@ -31,14 +31,17 @@ def parse_checkpoint_id(checkpoint_id):
 def train_step(x, step_idx, epoch_idx, model, criterion, optimizer, device, writer, batch_size):
     model.train()
 
-    input_seq = x[:, :-1]
-    target_seq = x[:, 1:]
+    # Split the data into input and target sequences
+    input_seq = x[:, :-1]  # Everything except the last timestep
+    target_seq = x[:, 1:]  # Everything except the first timestep
 
     input_seq = input_seq.to(device)
 
+    # Forward pass
     outputs = model(input_seq)
     loss = criterion(outputs, target_seq)
 
+    # Backward and optimize
     optimizer.zero_grad()
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -49,6 +52,11 @@ def train_step(x, step_idx, epoch_idx, model, criterion, optimizer, device, writ
         writer.add_histogram(f'{name}', param, epoch_idx)
         if param.grad is not None:
             writer.add_histogram(f'{name}.grad', param.grad, epoch_idx)
+
+    # Optional: log gradients and weights
+    # for name, param in model.named_parameters():
+    #     writer.add_histogram(f'{name}/grad', param.grad, epoch_idx)
+    #     writer.add_histogram(name, param, epoch_idx)
 
     return loss.item()
 
@@ -106,7 +114,7 @@ def main():
     DEVICE = args.device
     CHECKPOINT_ID = args.checkpoint_id
 
-    SAVE_PATH = f"models/condition_lstm{f'_{CHECKPOINT_ID}' if CHECKPOINT_ID else ''}.pt"
+    SAVE_PATH = f"models/condition_lstm_ln_{f'_{CHECKPOINT_ID}' if CHECKPOINT_ID else ''}.pt"
 
     start_epoch, start_sequence = parse_checkpoint_id(
         args.checkpoint_id) if CHECKPOINT_ID else 0, 0
@@ -136,7 +144,7 @@ def main():
         test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
     # 3. Instantiate the model, criterion, and optimizer
-    model = Uncondition_LSTM(
+    model = Uncondition_LayerNorm_LSTM(
         alphabet_size=78,
         input_size=3,
         hidden_size=400,
@@ -163,7 +171,7 @@ def main():
         model.parameters(), lr=LR, alpha=alpha, eps=eps, momentum=momentum)
 
     writer = SummaryWriter(
-        f"runs/experiment_uncon_RMSprop_outputlayerNorm_batch{BATCH_SIZE}")
+        f"runs/experiment_uncon_RMSprop_outputlayerNorm_eachlayer_batch{BATCH_SIZE}")
 
 # Train the model and validate periodically
     EPOCHS += start_epoch
@@ -186,7 +194,7 @@ def main():
         # print(f"Epoch {epoch+1}/{EPOCHS}, Validation Loss: {valid_loss:.4f}")
 
         # Save each epoch
-        dynamic_save_path = f"models/uncon_lstm_batch{BATCH_SIZE}_outputLayerNorm_{epoch+1}e.pt"
+        dynamic_save_path = f"models/uncon_lstm_batch{BATCH_SIZE}_outputLayerNorm_eachlayer_{epoch+1}e.pt"
         torch.save(model.state_dict(), dynamic_save_path)
         print(f"Model saved to {dynamic_save_path}")
 

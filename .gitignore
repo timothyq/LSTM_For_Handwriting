@@ -2,3 +2,7 @@ admin/*
 **.pyc
 notebooks/.ipynb_checkpoints/*
 runs/*
+models/*.pt
+.venv
+.ipynb_checkpoints
+path

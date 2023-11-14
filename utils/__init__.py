@@ -3,6 +3,8 @@ import torch
 from matplotlib import pyplot
 import matplotlib.pyplot as plt
 import numpy as np
+import jax.numpy as jnp
+import jax
 
 
 def plot_stroke(stroke, save_name=None):
