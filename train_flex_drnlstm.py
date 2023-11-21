@@ -30,10 +30,8 @@ def print_params_structure(params, indent=0):
     for key, value in params.items():
         print("  " * indent + key)
         if isinstance(value, dict):
-            # Recursive call for nested dictionaries (submodules)
             print_params_structure(value, indent + 1)
         else:
-            # Print the shape of the parameter array
             print("  " * (indent + 1) + str(value.shape))
 
 
@@ -67,6 +65,29 @@ def log_params(writer, params, tag_prefix="", global_step=None):
         else:
             print(
                 f"Skipping unexpected parameter type: {full_tag} of type {type(param)}")
+
+
+def interleaved_split(dataset, train_frac, val_frac):
+    train_indices, val_indices, test_indices = [], [], []
+    total_size = len(dataset)
+
+    # Calculate the number of samples for train and validation sets
+    train_size = int(total_size * train_frac)
+    val_size = int(total_size * val_frac)
+
+    for idx in range(total_size):
+        if len(train_indices) < train_size:
+            train_indices.append(idx)
+        elif len(val_indices) < val_size:
+            val_indices.append(idx)
+        else:
+            test_indices.append(idx)
+
+    train_dataset = torch.utils.data.Subset(dataset, train_indices)
+    val_dataset = torch.utils.data.Subset(dataset, val_indices)
+    test_dataset = torch.utils.data.Subset(dataset, test_indices)
+
+    return train_dataset, val_dataset, test_dataset
 
 
 @jax.jit
@@ -123,22 +144,22 @@ def main():
 
     stroke_data.sort_by_sequence_length()
 
-    train_dataset, val_dataset, test_dataset = random_split(
-        stroke_data, [train_size, val_size, test_size])
+    train_dataset, val_dataset, test_dataset = interleaved_split(
+        stroke_data, 0.8, 0.1)
 
     train_loader = DataLoader(
         train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, collate_fn=collate_fn)
 
     # 3. Create schedular
-    base_learning_rate = 0.001
+    base_learning_rate = LR
     steps_per_epoch = len(train_loader)
     total_epochs = EPOCHS
-    warmup_epochs = 1
+    warmup_epochs = 2
     total_steps = steps_per_epoch * total_epochs
     print("total_steps", total_steps)
     lr_schedule = optax.join_schedules(
         schedules=[
-            optax.linear_schedule(init_value=0.0001, end_value=base_learning_rate,
+            optax.linear_schedule(init_value=LR/3, end_value=base_learning_rate,
                                   transition_steps=warmup_epochs * steps_per_epoch),
             optax.cosine_decay_schedule(
                 init_value=base_learning_rate, decay_steps=total_steps - warmup_epochs * steps_per_epoch)

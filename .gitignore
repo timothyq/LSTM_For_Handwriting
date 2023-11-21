@@ -6,3 +6,5 @@ models/*.pt
 .venv
 .ipynb_checkpoints
 path
+/*DS_Store
+```

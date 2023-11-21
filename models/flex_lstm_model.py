@@ -81,7 +81,7 @@ class RMSNormLSTM(nn.Module):
         # output_sequence has shape [batch_size, sequence_length, hidden_size * num_layers]
         carry, output_sequence = scanLSTM(multi_lstm_cell, init_carry, x)
 
-        print("output_sequence shape: ", output_sequence.shape)
+        # print("output_sequence shape: ", output_sequence.shape)
 
         final_output = nn.Dense(self.component_k * 6 + 1)(output_sequence)
 

@@ -11,7 +11,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 import argparse
 from torch.utils.data import DataLoader, random_split
-# Assuming Stroke_dataset and Condition_LSTM are defined elsewhere
 
 
 def parse_checkpoint_id(checkpoint_id):

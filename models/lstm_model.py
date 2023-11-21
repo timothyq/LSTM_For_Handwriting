@@ -13,7 +13,7 @@ class MixtureDensityLayer(nn.Module):
         self.num_mixtures = num_mixtures
 
     def forward(self, output):
-        # output is [batch, seq_len, 6*K+1]
+        # output is [batch, seq_len, 6*K+1] or [batch, 6*K+1]
         K = self.num_mixtures
         pi_logits, mu1, mu2, std_exp1, std_exp2, corr_tanh, eos = torch.split(
             output, K, dim=-1)
@@ -55,9 +55,10 @@ class LayerNormLSTMCell(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, input, states):
+        # hx, cx is [batch, hidden_size]
         hx, cx = states
         hx, cx = self.lstm_cell(input, (hx, cx))
-        hx = self.ln(hx)
+        hx = self.ln(hx)  # [batch, hidden_size]
         hx = self.dropout(hx)
         return hx, cx
 
@@ -89,7 +90,7 @@ class Uncondition_LayerNorm_LSTM(nn.Module):
         self.hidden_size = hidden_size
 
         layers = [LayerNormLSTMCell(
-            input_size if i == 0 else hidden_size, hidden_size, dropout) for i in range(num_layers)]
+            input_size if i == 0 else hidden_size + input_size, hidden_size, dropout) for i in range(num_layers)]
         self.layers = nn.ModuleList(layers)
         self.fc = nn.Linear(hidden_size, component_K * 6 + 1)
         self.mdn = MixtureDensityLayer(component_K)
@@ -97,17 +98,35 @@ class Uncondition_LayerNorm_LSTM(nn.Module):
 
     def forward(self, input):
         batch_size, seq_len, _ = input.size()
-        current_input = input
+        # current_input = input  # [batch, seq_len, input_size]
 
+        # for layer in self.layers:
+        #     hidden_seq = []
+        #     hx, cx = layer.init_hidden(batch_size, input.device)
+        #     for t in range(seq_len):
+        #         hx, cx = layer(current_input[:, t, :], (hx, cx))
+        #         hidden_seq.append(hx.unsqueeze(1))
+        #     current_input = torch.cat(hidden_seq, dim=1)
+        hxs = []
+        cxs = []
         for layer in self.layers:
-            hidden_seq = []
-            hx, cx = layer.init_hidden(batch_size, input.device)
-            for t in range(seq_len):
-                hx, cx = layer(current_input[:, t, :], (hx, cx))
-                hidden_seq.append(hx.unsqueeze(1))
-            current_input = torch.cat(hidden_seq, dim=1)
+            hxi, cxi = layer.init_hidden(batch_size, input.device)
+            hxs.append(hxi)
+            cxs.append(cxi)
 
-        return self.mdn(self.fc(current_input))
+        for t in range(seq_len):
+            x = input[:, t, :].squeeze(1)  # [batch, input_size]
+            outputs_t_stack = []
+            for i, layer in enumerate(self.layers):
+                hxs[i], cxs[i] = layer(
+                    x, (hxs[i], cxs[i]))
+                outputs_t_stack.append(hxs[i])
+                x = torch.concat(
+                    input, hxs[i], dim=2)  # [batch, input_size + hidden_size]
+            # [batch, num_layers * hidden_size]
+            outputs_t = torch.stack(outputs_t_stack, dim=1)
+        outputs = torch.stack(outputs_t, dim=1)
+        return self.mdn(self.fc(outputs))
 
     def _initialize_weights(self):
         for layer in self.layers:
@@ -213,7 +232,6 @@ class Condition_LSTM2(nn.Module):
         self.output_size = component_K * 6 + 1
         self.dropout = dropout
 
-        # LSTM layers
         self.lstm1 = nn.LSTM(input_size + alphabet_size, hidden_size,
                              num_layers=num_layers, batch_first=True, dropout=dropout)
         # self.fc1 = nn.Linear(hidden_size, 3 * window_K)
